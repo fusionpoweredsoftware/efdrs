@@ -1,68 +1,124 @@
 import chalk from 'chalk';
 
 function digitalRoot(n, base) {
-    while (n >= base) {
-        let sum = 0;
-        while (n > 0) {
-            sum += n % base;
-            n = Math.floor(n / base);
-        }
-        n = sum;
+    if (n === 0) return 0;
+    return 1 + ((n - 1) % (base - 1));
+}
+
+function windowToKey(sequence, start, length) {
+    let key = '';
+    for (let i = 0; i < length; i++) {
+        if (i > 0) key += ',';
+        key += sequence[start + i];
     }
-    return n;
+    return key;
+}
+
+function endsWithPattern(sequence, seqLength, pattern, patternLength) {
+    const startPos = seqLength - patternLength;
+    for (let i = 0; i < patternLength; i++) {
+        if (sequence[startPos + i] !== pattern[i]) return false;
+    }
+    return true;
 }
 
 function run(mode, base, n) {
-    const sequence = [1, 1];
+    const sequence = new Array(n);
+    sequence[0] = 1;
+    sequence[1] = 1;
+    let seqLength = 2;
+    
     const repeats = new Set();
     const repeatList = [];
     let termCount = 2;
     let endPattern = [1, 1];
     let skip = false;
+    
+    // For GEFDRS: track seen windows by termCount
+    const windowSets = mode === 'gefdr' ? new Map() : null;
+    
+    if (mode === 'gefdr') {
+        const set2 = new Set();
+        set2.add('1,1');
+        windowSets.set(2, set2);
+    }
 
-    while (sequence.length < n) {
-        const sum = sequence.slice(-termCount).reduce((a, b) => a + b, 0);
-        sequence.push(digitalRoot(sum, base));
+    // Running sum of last termCount elements
+    let runningSum = 2; // 1 + 1
+
+    while (seqLength < n) {
+        const newDigit = digitalRoot(runningSum, base);
+        sequence[seqLength] = newDigit;
+        seqLength++;
+        
+        // Update running sum: add new digit, remove oldest if we have more than termCount
+        runningSum += newDigit;
+        if (seqLength > termCount) {
+            runningSum -= sequence[seqLength - termCount - 1];
+        }
         
         if (!skip) {
-            const window = sequence.slice(-termCount);
+            const windowStart = seqLength - termCount;
             let found = false;
             
             if (mode === 'gefdr') {
-                const windowStr = window.join(',');
-                const history = sequence.slice(0, -termCount);
-                for (let i = 0; i <= history.length - termCount; i++) {
-                    if (history.slice(i, i + termCount).join(',') === windowStr) {
-                        found = true;
-                        break;
+                const windowKey = windowToKey(sequence, windowStart, termCount);
+                let windowSet = windowSets.get(termCount);
+                
+                if (!windowSet) {
+                    // New termCount after evolution: build set from all historical windows
+                    windowSet = new Set();
+                    for (let i = 0; i <= windowStart - 1; i++) {
+                        windowSet.add(windowToKey(sequence, i, termCount));
                     }
+                    windowSets.set(termCount, windowSet);
+                }
+                
+                if (windowSet.has(windowKey)) {
+                    found = true;
+                } else {
+                    windowSet.add(windowKey);
                 }
             } else {
-                const ending = window.slice(-endPattern.length);
-                if (ending.join(',') === endPattern.join(',') && sequence.length > termCount) {
+                // LEFDRS: check if current window ends with endPattern
+                if (seqLength > termCount && endsWithPattern(sequence, seqLength, endPattern, endPattern.length)) {
                     found = true;
                 }
             }
             
             if (found) {
                 for (let j = 0; j < termCount; j++) {
-                    repeats.add(sequence.length - termCount + j);
+                    repeats.add(windowStart + j);
                 }
+                
+                const patternStr = windowToKey(sequence, windowStart, termCount);
                 repeatList.push({
-                    pattern: window.join(','),
-                    position: sequence.length - termCount,
+                    pattern: patternStr,
+                    position: windowStart,
                     newTermCount: termCount + 1
                 });
-                endPattern = window.slice();
+                
+                // Update endPattern for LEFDRS
+                endPattern = [];
+                for (let j = 0; j < termCount; j++) {
+                    endPattern.push(sequence[windowStart + j]);
+                }
+                
                 termCount++;
                 skip = true;
+                
+                // Recalculate running sum for new termCount
+                runningSum = 0;
+                for (let j = seqLength - termCount; j < seqLength; j++) {
+                    if (j >= 0) runningSum += sequence[j];
+                }
             }
         } else {
             skip = false;
         }
     }
 
-    return { sequence, repeats, repeatList };
+    return { sequence: Array.from(sequence).slice(0, seqLength), repeats, repeatList };
 }
 
 function parseSuperquiet(format, base, digits, lefdrResult, gefdrResult) {
